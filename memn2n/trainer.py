@@ -7,6 +7,7 @@ from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from dataset import bAbIDataset
 from model import MemN2N
+import pdb
 
 class Trainer():
     def __init__(self, config):
@@ -37,7 +38,7 @@ class Trainer():
 
         self.mem_n2n = MemN2N(settings)
         self.ce_fn = nn.CrossEntropyLoss(size_average=False)
-        self.opt = torch.optim.SGD(self.mem_n2n.parameters(), lr=config.lr)
+        self.opt = torch.optim.SGD(self.mem_n2n.parameters(), lr=config.lr, weight_decay=1e-5)
         print(self.mem_n2n)
             
         if config.cuda:
@@ -49,6 +50,7 @@ class Trainer():
 
     def fit(self):
         config = self.config
+        best_acc = 0
         for epoch in range(self.start_epoch, config.max_epochs):
             loss = self._train_single_epoch(epoch)
             lr = self._decay_learning_rate(self.opt, epoch)
@@ -57,13 +59,18 @@ class Trainer():
                 train_acc = self.evaluate("train")
                 test_acc = self.evaluate("test")
                 print(epoch+1, loss, train_acc, test_acc)
+                if test_acc > best_acc:
+                    best_acc = test_acc
         print(train_acc, test_acc)
+        return best_acc
 
     def load(self, directory):
         pass
 
-    def evaluate(self, data="test"):
+    def evaluate(self, data="test", ensemble = False):
         correct = 0
+        pred_prob_all = np.zeros((0, 85))
+        answers = np.zeros(0)
         loader = self.train_loader if data == "train" else self.test_loader
         for step, (story, query, answer) in enumerate(loader):
             story = Variable(story)
@@ -76,10 +83,14 @@ class Trainer():
                 answer = answer.cuda()
 
             pred_prob = self.mem_n2n(story, query)[1]
+            if ensemble:
+                pred_prob_all = np.concatenate((pred_prob_all, pred_prob.data), 0)
+                answers = np.concatenate((answers, answer.data), 0)
             pred = pred_prob.data.max(1)[1] # max func return (max, argmax)
             correct += pred.eq(answer.data).cpu().sum()
-
         acc = correct / len(loader.dataset)
+        if ensemble:
+            return acc, correct, pred_prob_all, answers
         return acc
 
     def _train_single_epoch(self, epoch):
